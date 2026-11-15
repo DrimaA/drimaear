@@ -499,7 +499,9 @@
       c.hover = c === hov?.c;
       delete c.tone;
     }
-    return { pitch, xs, ys, rows, cells, cargos, red, fills, tips, vEdges, hEdges, dropped, cursor: findCursor(L, W, H, xs, ys, rows, tips), comb: { off: gx.off, p: gx.p, v: gx.v } };
+    const vis = gridRows(L, W, H, xs, ys, rows, tips);
+    for (let r = vis; r < rows; r++) cells[r] = cells[r].map(() => "hidden");
+    return { pitch, xs, ys, rows, vis, cells, cargos, red, fills, tips, vEdges, hEdges, dropped, cursor: findCursor(L, W, H, xs, ys, vis, tips), comb: { off: gx.off, p: gx.p, v: gx.v } };
   }
   function cellStats(L, px, W, x0, x1, y0, y1, pitch) {
     const m = Math.round(pitch * 0.12), v = [], rg = [], bg = [], lo = [];
@@ -627,6 +629,7 @@
     // как в полном скане: чёрные поля кадра не прикидываются плашками
     const tips = findTips(lum, W, H, xs, ys, pitch).filter((t) => tipHide(t, lum, W, pitch, xs));
     const inTip = (x, y) => tips.some((t) => x >= t.x0 && x <= t.x1 && y >= t.y0 && y <= t.y1);
+    const vis = gridRows(L, W, H, xs, ys, rows, tips);
     let same = 0, differ = 0;
     for (let r = 0; r < rows; r++) {
       const fr = [], cr = [];
@@ -636,7 +639,7 @@
         const isTip = inTip((xs[q] + xs[q + 1]) / 2, (ys[r] + ys[r + 1]) / 2);
         if (isRed) red.push([q, r]);
         const cargo = !isRed && !isTip && f.dark < 0.6 && f.fill >= CARGO_FILL && f.fill <= 60 && (f.flat >= 0.4 || f.hi >= 0.02);
-        const cell = isRed || isTip ? "hidden" : cargo ? "cargo" : f.dark >= 0.6 ? "hidden" : "empty";
+        const cell = r >= vis || isRed || isTip ? "hidden" : cargo ? "cargo" : f.dark >= 0.6 ? "hidden" : "empty";
         const was = prev.cells[r]?.[q];
         if (cell !== "hidden" && (was === "cargo" || was === "empty")) {
           if (cell === "cargo" === (was === "cargo")) same++;
@@ -650,8 +653,40 @@
     }
     if (differ > Math.max(2, (same + differ) * 0.1)) return null;
     const back = (t) => t && { x0: t.x0 + ox, y0: t.y0 + oy, x1: t.x1 + ox, y1: t.y1 + oy };
-    const cu = findCursor(L, W, H, xs, ys, rows, tips);
-    return { light: true, pitch, xs: prev.xs, ys: prev.ys, rows, cells, cargos: [], red, fills, tips: tips.map(back), cursor: cu ? { x: cu.x + ox, y: cu.y + oy } : null };
+    const cu = findCursor(L, W, H, xs, ys, vis, tips);
+    return { light: true, pitch, xs: prev.xs, ys: prev.ys, rows, vis, cells, cargos: [], red, fills, tips: tips.map(back), cursor: cu ? { x: cu.x + ox, y: cu.y + oy } : null };
+  }
+  // Сколько верхних рядов — настоящая сетка прилавка. Под прилавком ABI идут полоса «Всего / Имеется»
+  // и кнопки «Назад / Купить»: детектор продлевает на них ряды, а иконки денег рядом с «Всего:» и
+  // «Имеется:» по форме похожи на стрелку — курсор «находился» там в каждом кадре без настоящего
+  // курсора, и наведение уходило на груз, который трекер помнит в этих рядах. У рядов сетки есть
+  // вертикальные стенки (хотя бы одна линия xs по 60% высоты ряда), у полосы и кнопок — нет.
+  // Отрезаем только хвост снизу; линии под плашкой подсказки не считаем (их не видно).
+  function gridRows(L, W, H, xs, ys, rows, tips) {
+    const hasGrid = (r) => {
+      const h = ys[r + 1] - ys[r];
+      const y0 = Math.max(0, Math.round(ys[r] + h * 0.15)), y1 = Math.min(H - 1, Math.round(ys[r + 1] - h * 0.15));
+      if (y1 - y0 < 4) return true;
+      let counted = 0, walls = 0;
+      for (let k = 0; k <= GRID_COLS; k++) {
+        const x = Math.round(xs[k]);
+        if (x < 5 || x > W - 6) continue;
+        if (tips.some((t) => t.x0 - 4 <= x && x <= t.x1 + 4 && t.y1 > y0 && t.y0 < y1)) continue;
+        counted++;
+        let on = 0, n = 0;
+        for (let y = y0; y <= y1; y++) {
+          const i = y * W + x;
+          const v = Math.max(L[i - 1], L[i], L[i + 1]);
+          n++;
+          if (v >= LINE_MIN && v - Math.max(L[i - 4], L[i + 4]) >= LINE_RISE) on++;
+        }
+        if (on >= n * 0.6) walls++;
+      }
+      return counted === 0 || walls > 0;
+    };
+    let vis = rows;
+    while (vis > 2 && !hasGrid(vis - 1)) vis--;
+    return vis;
   }
   function tipHide(t, lum, W, pitch, xs) {
     const w = t.x1 - t.x0, h = t.y1 - t.y0;
@@ -864,6 +899,8 @@
         xs: det.xs,
         ys: det.ys,
         rows: det.rows,
+        // число верхних рядов, которые точно сетка (ниже — полоса «Всего» и кнопки)
+        vis: det.vis ?? det.rows,
         cells: det.cells,
         cargos: det.cargos,
         red: det.red,

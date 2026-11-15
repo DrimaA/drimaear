@@ -4705,10 +4705,45 @@ function seenGrid(frame, det) {
   reader.setRate(frame.at - grid.seenAt < FPS_KEEP_MS ? scanCfg().fps : FPS_IDLE);
 }
 function cargoUnder(det, x, y, shift) {
+  // Ниже сетки (полоса «Всего / Имеется», кнопки) грузов нет, даже если трекер помнит там груз
+  // с прошлой прокрутки прилавка.
+  if (det.vis != null && det.vis < det.rows && y >= det.ys[det.vis]) return null;
   const cell = tracker.cellAt(det, x, y, shift);
   if (!cell) return null;
   const k = `${cell[0]},${cell[1]}`;
   for (const g of tracker.cargos.values()) if (cellsOf(g).includes(k)) return g;
+  return null;
+}
+// Груз по плашке подсказки, когда курсор не найден. Углы — по порядку: левый верхний (обычное
+// положение у курсора), правый верхний, левый нижний, правый нижний; раньше брался первый груз
+// трекера, у которого совпал ЛЮБОЙ угол, — нижние углы плашки лежат на грузе ниже, и наведение
+// уезжало на соседа. У правого края экрана ABI не переворачивает плашку, а сдвигает её влево,
+// чтобы влезла: её левый край тогда не у курсора, курсор может быть где угодно над ней. Если
+// над такой плашкой больше одного груза — честно «не знаю» (чужой груз хуже, чем никакого).
+function tipHover(det, shift, frameW) {
+  const occ = tracker.occupancy();
+  for (const t of det.tips) {
+    if (!t) continue;
+    const clamped = frameW > 0 && t.x1 >= frameW - 4;
+    if (clamped) {
+      const top = tracker.cellAt(det, Math.min(t.x0 + 2, det.xs[GRID_COLS] - 1), t.y0 + 2, shift);
+      if (!top) continue;
+      const set = /* @__PURE__ */ new Set();
+      for (let q = 0; q < GRID_COLS; q++) {
+        if (det.xs[q + 1] <= t.x0 - det.pitch * 0.3) continue;
+        const c = occ.get(`${q},${top[1]}`);
+        if (c) set.add(c);
+      }
+      if (set.size === 1) return { g: [...set][0] };
+      if (set.size > 1) return { g: null, why: `плашка прижата к правому краю экрана, под ней ${set.size} груза (${[...set].map((c) => c.key).join(", ")})` };
+      continue;
+    }
+    for (const [x, y] of [[t.x0 + 2, t.y0 + 2], [t.x1 - 2, t.y0 + 2], [t.x0 + 2, t.y1 - 2], [t.x1 - 2, t.y1 - 2]]) {
+      const c = tracker.cellAt(det, x, y, shift);
+      const g = c && occ.get(`${c[0]},${c[1]}`);
+      if (g) return { g };
+    }
+  }
   return null;
 }
 function trackHover(det, frame, image) {
@@ -4735,11 +4770,13 @@ function trackHover(det, frame, image) {
     gridLog(`наведение не найдено: курсор ${det.cursor ? "есть" : "нет"}, плашек ${det.tips?.length ?? 0}, прирост яркости ${own ? own.by.toFixed(1) : "нет сравнения"} (нужно ${HOVER_RISE}), грузов ${tracker.cargos.size}`);
   }
   if (!g && !heldNow && det.tips?.length) {
-    for (const c of tracker.cargos.values()) {
-      if (!tracker.tipCell(det, c, shift, true)) continue;
-      g = c;
-      if (c.key !== grid.hoverKey) gridLog(`наведение по подсказке: груз ${c.key}`);
-      break;
+    const t = tipHover(det, shift, image?.width ?? frame.bitmap?.width ?? 0);
+    if (t?.g) {
+      g = t.g;
+      if (g.key !== grid.hoverKey) gridLog(`наведение по подсказке: груз ${g.key}`);
+    } else if (t?.why && frame.at - (grid.tipMissAt ?? 0) > 3e3) {
+      grid.tipMissAt = frame.at;
+      gridLog(`наведение по подсказке не определить: ${t.why}`);
     }
   }
   tracker.learn(det, [g, near], shift);
