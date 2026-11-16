@@ -5516,8 +5516,10 @@ function heardHtml(heard, box, price = null, blink = 0, stripH = 0, solid = true
   const bad = (x) => !x.ok;
   const { redP, red } = cargoMarks(heard);
   const over = (html, cls, style = "") => `<span class="${cls}" style="left:${box.s}px;top:${box.t}px;width:${W}px;height:${H}px;${style}">${html}</span>`;
-  if (redP >= 0.9995) {
-    if (!solid) return "";
+  // Весь груз — краснуха. 💎 — только когда это подтверждено (звук пойман, пока груз держали в руке,
+  // и совпадение уверенное). Без подтверждения раньше клетка оставалась пустой; теперь — обычные
+  // иконки краснухи с «100%» (без мигания, пока не подтверждено), как у любого красного груза.
+  if (redP >= 0.9995 && solid) {
     // Пульс алмаза: растёт до размера груза, но не дальше меньшей его стороны (целиком видно),
     // и возвращается к текущему размеру. Размер задаём инлайн — он одинаков в большой сетке и в окне поверх игры.
     const fs = gemFs > 0 ? gemFs : Math.min(62, Math.max(28, Math.min(W, H) * 0.9));
