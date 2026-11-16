@@ -2644,7 +2644,12 @@ var GridTracker = class {
   hoverOf(det, shift = this.matchShift(det) ?? this.shift) {
     if (shift == null || !det.fills) return null;
     const rises = /* @__PURE__ */ new Map();
+    // Вскрытый разведкой груз (фон цвета редкости) — не кандидат: иначе груз, вскрытый посреди
+    // сессии, становился «наведённым» навсегда — наведённый не учится (learn его пропускает), и его
+    // запомненная яркость оставалась прежней, тёмной. Не кандидат → учится, как все.
+    const tinted = tintedCargos(det, shift, this.cargos.values());
     for (const g of this.cargos.values()) {
+      if (tinted.has(g)) continue;
       const list = [];
       for (const [k, [fill, lo]] of this.visibleCells(det, g, shift)) {
         const b = this.baseline.get(k);
@@ -4728,12 +4733,40 @@ function cargoUnder(det, x, y, shift) {
 // против 17 у всех прочих). Сравниваем грузы внутри одного кадра, а не с выученной «обычной»
 // яркостью: работает и в лёгких кадрах, и сразу после сброса сетки, и не зависит от плашки.
 // Клетки под плашкой подсказки (hidden) не учитываются, остальные клетки груза светятся так же.
+// Вскрытые разведкой грузы (видна картинка предмета) тоже светлее остальных — 26–30 против 17, как
+// подсветка, — и раньше «забирали» наведение. Но их фон окрашен в цвет редкости (фиолетовый:
+// B−G ≈ 18–20, золотой, синий…), а подсветка наведения серая, как обычный груз (R−G, B−G ≈ 0).
+// Грузы с окрашенным фоном в сравнение не берём: ни кандидатом, ни в «обычную» яркость.
 var GLOW_RISE = 6;
 var GLOW_GAP = 4;
+var GLOW_TINT = 4;
+// Грузы с окрашенным фоном в этом кадре (вскрытые разведкой). Оттенок меряем от медианы всех грузов
+// кадра — обычный груз почти серый. Нужно ≥4 грузов, иначе сравнивать не с чем.
+function tintedCargos(det, shift, cargos = tracker.cargos.values()) {
+  const out = /* @__PURE__ */ new Set();
+  if (shift == null || !det.fills || !det.cells) return out;
+  const vals = [];
+  for (const g of cargos) {
+    const rg = [], bg = [];
+    for (let r = g.r; r < g.r + g.h; r++) for (let q = g.q; q < g.q + g.w; q++) {
+      const fr = r - shift, c = det.fills[fr]?.[q];
+      if (!c || det.cells[fr]?.[q] !== "cargo" || c[2] >= DARK_MAX || c[3] == null) continue;
+      rg.push(c[3]);
+      bg.push(c[4]);
+    }
+    if (rg.length) vals.push({ g, rg: median2(rg), bg: median2(bg) });
+  }
+  if (vals.length < 4) return out;
+  const urg = median2(vals.map((v) => v.rg)), ubg = median2(vals.map((v) => v.bg));
+  for (const v of vals) if (Math.max(Math.abs(v.rg - urg), Math.abs(v.bg - ubg)) >= GLOW_TINT) out.add(v.g);
+  return out;
+}
 function glowHover(det, shift) {
   if (shift == null || !det.fills || !det.cells) return null;
+  const tinted = tintedCargos(det, shift);
   const vals = [];
   for (const g of tracker.cargos.values()) {
+    if (tinted.has(g)) continue;
     const f = [], lo = [];
     for (let r = g.r; r < g.r + g.h; r++) for (let q = g.q; q < g.q + g.w; q++) {
       const fr = r - shift, c = det.fills[fr]?.[q];
@@ -4749,7 +4782,7 @@ function glowHover(det, shift) {
   vals.sort((a, b) => b.rise - a.rise);
   const [a, b] = vals;
   const sure = a.rise >= Math.max(GLOW_RISE, uf * 0.25) && a.rise - (b?.rise ?? 0) >= GLOW_GAP;
-  return { g: sure ? a.g : null, rise: a.rise, rises: new Map(vals.map((v) => [v.g, v.rise])) };
+  return { g: sure ? a.g : null, rise: a.rise, rises: new Map(vals.map((v) => [v.g, v.rise])), tinted: tinted.size };
 }
 function tipHover(det, shift, frameW, glow = null) {
   const occ = tracker.occupancy();
@@ -4812,7 +4845,7 @@ function trackHover(det, frame, image) {
   // курсора, прироста яркости или плашки подсказки.
   if (!g && !heldNow && frame.at - (grid.hoverMissAt ?? 0) > 3e3) {
     grid.hoverMissAt = frame.at;
-    gridLog(`наведение не найдено: курсор ${det.cursor ? "есть" : "нет"}, подсветка ${glow ? `+${glow.rise.toFixed(1)}` : "нет сравнения"} (нужно ${GLOW_RISE}), плашек ${det.tips?.length ?? 0}, прирост яркости ${own ? own.by.toFixed(1) : "нет сравнения"} (нужно ${HOVER_RISE}), грузов ${tracker.cargos.size}`);
+    gridLog(`наведение не найдено: курсор ${det.cursor ? "есть" : "нет"}, подсветка ${glow ? `+${glow.rise.toFixed(1)}` : "нет сравнения"} (нужно ${GLOW_RISE}, вскрытых не считаю: ${glow?.tinted ?? 0}), плашек ${det.tips?.length ?? 0}, прирост яркости ${own ? own.by.toFixed(1) : "нет сравнения"} (нужно ${HOVER_RISE}), грузов ${tracker.cargos.size}`);
   }
   if (!g && !heldNow && det.tips?.length) {
     const t = tipHover(det, shift, image?.width ?? frame.bitmap?.width ?? 0, glow);
