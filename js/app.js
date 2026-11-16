@@ -4720,7 +4720,34 @@ function cargoUnder(det, x, y, shift) {
 // уезжало на соседа. У правого края экрана ABI не переворачивает плашку, а сдвигает её влево,
 // чтобы влезла: её левый край тогда не у курсора, курсор может быть где угодно над ней. Если
 // над такой плашкой больше одного груза — честно «не знаю» (чужой груз хуже, чем никакого).
-function tipHover(det, shift, frameW) {
+// Наведённый груз по подсветке: фон груза под курсором заметно светлее остальных (на 2K — 28
+// против 17 у всех прочих). Сравниваем грузы внутри одного кадра, а не с выученной «обычной»
+// яркостью: работает и в лёгких кадрах, и сразу после сброса сетки, и не зависит от плашки.
+// Клетки под плашкой подсказки (hidden) не учитываются, остальные клетки груза светятся так же.
+var GLOW_RISE = 6;
+var GLOW_GAP = 4;
+function glowHover(det, shift) {
+  if (shift == null || !det.fills || !det.cells) return null;
+  const vals = [];
+  for (const g of tracker.cargos.values()) {
+    const f = [], lo = [];
+    for (let r = g.r; r < g.r + g.h; r++) for (let q = g.q; q < g.q + g.w; q++) {
+      const fr = r - shift, c = det.fills[fr]?.[q];
+      if (!c || det.cells[fr]?.[q] !== "cargo" || c[2] >= DARK_MAX) continue;
+      f.push(c[0]);
+      lo.push(c[1]);
+    }
+    if (f.length) vals.push({ g, fill: median2(f), lo: median2(lo) });
+  }
+  if (vals.length < 4) return null;
+  const uf = median2(vals.map((v) => v.fill)), ul = median2(vals.map((v) => v.lo));
+  for (const v of vals) v.rise = Math.max(v.fill - uf, v.lo - ul);
+  vals.sort((a, b) => b.rise - a.rise);
+  const [a, b] = vals;
+  const sure = a.rise >= Math.max(GLOW_RISE, uf * 0.25) && a.rise - (b?.rise ?? 0) >= GLOW_GAP;
+  return { g: sure ? a.g : null, rise: a.rise, rises: new Map(vals.map((v) => [v.g, v.rise])) };
+}
+function tipHover(det, shift, frameW, glow = null) {
   const occ = tracker.occupancy();
   for (const t of det.tips) {
     if (!t) continue;
@@ -4735,6 +4762,10 @@ function tipHover(det, shift, frameW) {
         if (c) set.add(c);
       }
       if (set.size === 1) return { g: [...set][0] };
+      if (set.size > 1 && glow) {
+        const by = [...set].map((c) => ({ c, v: glow.rises.get(c) ?? -Infinity })).sort((x, y) => y.v - x.v);
+        if (by[0].v >= GLOW_RISE / 2 && by[0].v - (by[1]?.v ?? -Infinity) >= GLOW_GAP / 2) return { g: by[0].c };
+      }
       if (set.size > 1) return { g: null, why: `плашка прижата к правому краю экрана, под ней ${set.size} груза (${[...set].map((c) => c.key).join(", ")})` };
       continue;
     }
@@ -4756,10 +4787,20 @@ function trackHover(det, frame, image) {
   // фиксации flow.holdKey вообще не ставился — у звука исчезал путь «держали в руке», и
   // взятие оставалось без привязки. Наложение сетки locateRed и так отсекает через shift.
   const heldNow = tracker.locateRed(det, shift);
+  const glow = heldNow ? null : glowHover(det, shift);
   let g = null;
   if (det.cursor && !heldNow) {
     g = cargoUnder(det, det.cursor.x, det.cursor.y, shift);
-    if (g && g.key !== grid.hoverKey) gridLog(`наведение по курсору: груз ${g.key}`);
+    // Курсор и подсветка расходятся: верим подсветке. Курсор мог стоять на стенке между грузами
+    // (клетка соседа), а «курсором» могла оказаться похожая на стрелку картинка.
+    if (g && glow?.g && glow.g !== g && (glow.rises.get(g) ?? 0) < GLOW_RISE) {
+      if (glow.g.key !== grid.hoverKey) gridLog(`курсор над ${g.key}, но подсвечен ${glow.g.key} (+${glow.rise.toFixed(0)}) — беру подсвеченный`);
+      g = glow.g;
+    } else if (g && g.key !== grid.hoverKey) gridLog(`наведение по курсору: груз ${g.key}`);
+  }
+  if (!g && glow?.g) {
+    g = glow.g;
+    if (g.key !== grid.hoverKey) gridLog(`наведение по подсветке: груз ${g.key} (+${glow.rise.toFixed(0)})`);
   }
   if (!g) g = own ? own.g : near;
   // v18.65: когда наведение не найдено, раз в 3 с пишем ПРИЧИНУ в журнал. Без этого «прога не
@@ -4767,10 +4808,10 @@ function trackHover(det, frame, image) {
   // курсора, прироста яркости или плашки подсказки.
   if (!g && !heldNow && frame.at - (grid.hoverMissAt ?? 0) > 3e3) {
     grid.hoverMissAt = frame.at;
-    gridLog(`наведение не найдено: курсор ${det.cursor ? "есть" : "нет"}, плашек ${det.tips?.length ?? 0}, прирост яркости ${own ? own.by.toFixed(1) : "нет сравнения"} (нужно ${HOVER_RISE}), грузов ${tracker.cargos.size}`);
+    gridLog(`наведение не найдено: курсор ${det.cursor ? "есть" : "нет"}, подсветка ${glow ? `+${glow.rise.toFixed(1)}` : "нет сравнения"} (нужно ${GLOW_RISE}), плашек ${det.tips?.length ?? 0}, прирост яркости ${own ? own.by.toFixed(1) : "нет сравнения"} (нужно ${HOVER_RISE}), грузов ${tracker.cargos.size}`);
   }
   if (!g && !heldNow && det.tips?.length) {
-    const t = tipHover(det, shift, image?.width ?? frame.bitmap?.width ?? 0);
+    const t = tipHover(det, shift, image?.width ?? frame.bitmap?.width ?? 0, glow);
     if (t?.g) {
       g = t.g;
       if (g.key !== grid.hoverKey) gridLog(`наведение по подсказке: груз ${g.key}`);
