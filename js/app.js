@@ -2015,6 +2015,10 @@ var store = {
     }
   }
 };
+// Телефон (копия окна поверх игры): состояние объявлено рано — renderMini зовёт remoteSchedule с первого update().
+var REMOTE_SITE = "https://drimaa.github.io/drimaear/";
+var REMOTE_KEEP = 8;
+var phoneLink = { peer: null, id: null, conns: /* @__PURE__ */ new Set(), timer: null, error: "", retry: 0, modals: /* @__PURE__ */ new Set() };
 async function fetchCustomTemplates() {
   try {
     const r = await fetch("/api/templates", { cache: "no-store" });
@@ -5935,6 +5939,7 @@ function miniHtml() {
       ${flowHtml()}
       <div class="mini-map-head">
         <span>${L("Сетка", "Grid")}${tracker.locked ? L(" · сохранена", " · saved") : ""}</span>
+        <button class="mini-debug" data-remote-open title="${L("Дублировать на телефон по QR-коду", "Mirror to a phone via QR code")}">${icon("phone")}${phoneLink?.conns.size || ""}</button>
         <button class="mini-debug" data-mini-reset title="${L("Забыть сетку и все звуки", "Forget the grid and all sounds")}">${icon("reset")}${L("Сбросить", "Reset")}</button>
         <button class="mini-debug ${debug ? "on" : ""}" data-mini-panel="debug" aria-pressed="${debug}">${icon("activity")}${L("Дебаг", "Debug")}</button>
         ${debug ? `<button class="mini-debug" data-mini-savelog title="${L("Сохранить журнал в файл", "Save the log to a file")}">${icon("activity")}${L("Журнал .txt", "Log .txt")}</button>` : ""}
@@ -6097,6 +6102,7 @@ var miniLast = { doc: null, html: "" };
 var miniAt = 0;
 var miniTimer = null;
 function renderMini(again = true) {
+  remoteSchedule();
   if (!pip) return;
   if (pip.closed) {
     dropPip();
@@ -6126,7 +6132,10 @@ function renderMiniSafe(again = true) {
   miniLast.doc = doc;
   miniLast.html = html;
   const scroll = doc.querySelector(".mgrid-scroll")?.scrollTop ?? 0;
+  // окно с QR-кодом телефона живёт поверх разметки — перерисовка его не стирает
+  const qrModal = doc.querySelector(".remote-modal");
   doc.body.innerHTML = $("sprite").outerHTML + html;
+  if (qrModal) doc.body.append(qrModal);
   const box = doc.querySelector(".mgrid-scroll");
   if (!box) return;
   const resized = fitMiniGrid();
@@ -6183,6 +6192,9 @@ async function openPip({ quiet = false } = {}) {
     pip.document.body.className = "mini";
     pip.document.addEventListener("click", onQuizClick);
     pip.document.addEventListener("click", onGridClick);
+    pip.document.addEventListener("click", (e) => {
+      if (e.target.closest?.("[data-remote-open]")) remoteOpen(pip.document);
+    });
     installIconTips(pip.document);
     pip.document.addEventListener("click", onMiniPanel);
     pip.document.addEventListener("click", onMiniPop);
@@ -6227,6 +6239,7 @@ if (pipSupported) {
     if (pipPending && state.listening && !e.target.closest("#pip, #stop")) openPip();
   }, true);
 }
+$("phone")?.addEventListener("click", () => remoteOpen(document));
 function setStatus(text, live = false) {
   const el = $("status");
   if (!el) return;
@@ -6438,6 +6451,258 @@ try {
   console.error(err);
   setStatus(`${L("Не удалось загрузить звуки", "Failed to load sounds")}: ${err.message}`);
 }
+// ---- Телефон: копия окна поверх игры по QR-коду ----
+// Связь — WebRTC через PeerJS: сервер 0.peerjs.com только сводит компьютер и телефон (обмен адресами),
+// сами данные идут напрямую, в пределах одной Wi-Fi сети — внутри неё. Компьютер шлёт ту же разметку,
+// что рисует в окне поверх игры, но с размером клетки под экран телефона; телефон шлёт назад
+// нажатия (номер элемента в разметке), и они выполняются так же, как в окне поверх игры.
+// Адрес компьютера постоянный (хранится в браузере), поэтому телефон переподключается сам —
+// после перезагрузки сайта или сна телефона снова сканировать QR не нужно.
+function newRemoteId() {
+  const a = new Uint8Array(9);
+  crypto.getRandomValues(a);
+  return `drimaear-${[...a].map((b) => b.toString(36).padStart(2, "0")).join("").slice(0, 14)}`;
+}
+function remoteUrl() {
+  const base = /^https?:$/.test(location.protocol) ? new URL(".", location.href).href : REMOTE_SITE;
+  return `${base}remote.html#${phoneLink.id}`;
+}
+function remoteStart() {
+  if (phoneLink.peer || typeof Peer !== "function") return;
+  phoneLink.id ??= store.get("remoteId", null) || newRemoteId();
+  store.set("remoteId", phoneLink.id);
+  store.set("remoteOn", true);
+  phoneLink.error = "";
+  const peer = phoneLink.peer = new Peer(phoneLink.id, { debug: 0 });
+  peer.on("open", () => {
+    phoneLink.retry = 0;
+    phoneLink.error = "";
+    remoteShowStatus();
+  });
+  peer.on("connection", (c) => {
+    c.on("open", () => {
+      phoneLink.conns.add(c);
+      c.__cell = 0;
+      c.__v = 0;
+      c.__html = "";
+      c.__versions = /* @__PURE__ */ new Map();
+      c.send({ t: "sprite", svg: $("sprite")?.outerHTML ?? "" });
+      remoteShowStatus();
+      gridLog("телефон подключён");
+      renderMini();
+    });
+    c.on("data", (m) => remoteData(c, m));
+    const gone = () => {
+      if (!phoneLink.conns.delete(c)) return;
+      remoteShowStatus();
+      gridLog("телефон отключён");
+      renderMini();
+    };
+    c.on("close", gone);
+    c.on("error", gone);
+  });
+  peer.on("disconnected", () => {
+    if (phoneLink.peer !== peer || peer.destroyed) return;
+    setTimeout(() => {
+      if (phoneLink.peer === peer && !peer.destroyed && peer.disconnected) try {
+        peer.reconnect();
+      } catch {
+      }
+    }, 3e3);
+  });
+  peer.on("error", (err) => {
+    if (phoneLink.peer !== peer) return;
+    // Адрес ещё занят (сайт только что перезагрузили — сервер не успел отпустить старое
+    // подключение) или пропала сеть: пересоздаём через несколько секунд, адрес тот же.
+    const again = err.type === "unavailable-id" || ["network", "server-error", "socket-error", "socket-closed"].includes(err.type);
+    phoneLink.error = err.type === "unavailable-id" ? L("адрес ещё занят прошлым запуском, жду…", "address still held by the previous run, waiting…") : err.type === "browser-incompatible" ? L("браузер не поддерживает WebRTC", "browser has no WebRTC") : L(`нет связи с сервером (${err.type})`, `no connection to the server (${err.type})`);
+    remoteShowStatus();
+    if (!again || peer.destroyed && err.type !== "unavailable-id") return;
+    try {
+      peer.destroy();
+    } catch {
+    }
+    phoneLink.peer = null;
+    if (++phoneLink.retry > 20) return;
+    setTimeout(() => {
+      if (!phoneLink.peer && store.get("remoteOn", false)) remoteStart();
+    }, Math.min(3e4, 2e3 * phoneLink.retry));
+  });
+  remoteShowStatus();
+}
+function remoteStop(forget = false) {
+  const peer = phoneLink.peer;
+  phoneLink.peer = null;
+  for (const c of phoneLink.conns) try {
+    c.close();
+  } catch {
+  }
+  phoneLink.conns.clear();
+  try {
+    peer?.destroy();
+  } catch {
+  }
+  store.set("remoteOn", false);
+  if (forget) {
+    phoneLink.id = null;
+    store.remove("remoteId");
+  }
+  remoteShowStatus();
+  renderMini();
+}
+function remoteHtml(cell) {
+  const save = miniCell;
+  miniCell = cell;
+  try {
+    return miniHtml();
+  } finally {
+    miniCell = save;
+  }
+}
+function remoteSchedule() {
+  if (!phoneLink?.conns.size || phoneLink.timer) return;
+  phoneLink.timer = setTimeout(() => {
+    phoneLink.timer = null;
+    remotePush();
+  }, 150);
+}
+function remotePush(force = false, only = null) {
+  const byCell = /* @__PURE__ */ new Map();
+  for (const c of only ? [only] : phoneLink.conns) {
+    if (!c.open || !c.__cell) continue;
+    let html = byCell.get(c.__cell);
+    if (html == null) {
+      try {
+        html = remoteHtml(c.__cell);
+      } catch (err) {
+        console.warn("Телефон:", err);
+        continue;
+      }
+      byCell.set(c.__cell, html);
+    }
+    if (!force && html === c.__html) continue;
+    c.__html = html;
+    const v = ++c.__v;
+    c.__versions.set(v, html);
+    for (const k of c.__versions.keys()) if (c.__versions.size > REMOTE_KEEP) c.__versions.delete(k);
+    try {
+      c.send({ t: "html", v, cell: c.__cell, html });
+    } catch (err) {
+      console.warn("Телефон:", err);
+    }
+  }
+}
+function remoteData(c, m) {
+  if (!m || typeof m !== "object") return;
+  if (m.t === "size") {
+    const cell = Math.max(16, Math.min(96, Math.round(+m.cell) || 0));
+    if (cell && cell !== c.__cell) {
+      c.__cell = cell;
+      remotePush(true, c);
+    }
+    return;
+  }
+  if (m.t !== "click") return;
+  const html = c.__versions?.get(m.v);
+  if (html == null || !Number.isInteger(m.i) || m.i < 0) return;
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const el = tpl.content.querySelectorAll("*")[m.i];
+  if (!el || el.closest("[data-remote-open]")) return;
+  const e = { target: el, preventDefault() {
+  }, stopPropagation() {
+  } };
+  if (el.closest("[data-mini-reset]")) {
+    resetAll();
+    return;
+  }
+  for (const h of [onQuizClick, onGridClick, onMiniPanel, onMiniPop]) try {
+    h(e);
+  } catch (err) {
+    console.warn("Телефон, нажатие:", err);
+  }
+  renderMini();
+}
+function remoteStatusText() {
+  if (typeof Peer !== "function") return L("не загрузилась библиотека связи", "the connection library didn't load");
+  if (!phoneLink.peer) return phoneLink.error ? L(`выключено: ${phoneLink.error}`, `off: ${phoneLink.error}`) : L("выключено", "off");
+  if (phoneLink.error) return phoneLink.error;
+  if (!phoneLink.peer.open) return L("подключаюсь к серверу связи…", "connecting to the server…");
+  if (!phoneLink.conns.size) return L("ждёт телефон — отсканируйте QR-код", "waiting for a phone — scan the QR code");
+  return L(`подключено телефонов: ${phoneLink.conns.size}`, `phones connected: ${phoneLink.conns.size}`);
+}
+function remoteShowStatus() {
+  const n = phoneLink.conns.size;
+  const btn = $("phone");
+  if (btn) {
+    btn.classList.toggle("on", n > 0);
+    const span = btn.querySelector("span");
+    if (span) span.textContent = n ? `${L("Телефон", "Phone")} · ${n}` : L("Телефон", "Phone");
+  }
+  for (const m of phoneLink.modals) {
+    if (!m.isConnected) {
+      phoneLink.modals.delete(m);
+      continue;
+    }
+    const st = m.querySelector("[data-remote-status]");
+    if (st) {
+      st.textContent = remoteStatusText();
+      st.className = `remote-status ${n ? "ok" : phoneLink.error ? "bad" : ""}`;
+    }
+  }
+}
+function remoteQr(text) {
+  if (typeof qrcode !== "function") return `<p class="remote-status bad">${L("Не загрузился генератор QR-кода", "The QR generator didn't load")}</p>`;
+  const qr = qrcode(0, "M");
+  qr.addData(text);
+  qr.make();
+  return qr.createSvgTag({ cellSize: 4, margin: 3, scalable: true });
+}
+function remoteOpen(doc = document) {
+  remoteStart();
+  doc.querySelector(".remote-modal")?.remove();
+  const m = doc.createElement("div");
+  m.className = "remote-modal";
+  const draw = () => {
+    const url = remoteUrl();
+    m.innerHTML = `<div class="remote-card" role="dialog" aria-label="${L("Телефон", "Phone")}">
+      <div class="remote-head"><b>${L("Сетка на телефоне", "Grid on a phone")}</b><button class="remote-x" data-remote-close aria-label="${L("Закрыть", "Close")}">×</button></div>
+      <div class="remote-qr">${remoteQr(url)}</div>
+      <p class="remote-hint">${L("Наведите камеру телефона на код и откройте ссылку. Телефон и компьютер лучше держать в одной Wi-Fi сети. Ссылка постоянная: после перезагрузки сайта телефон подключится сам.", "Point the phone camera at the code and open the link. Keep the phone and PC on the same Wi-Fi if you can. The link is permanent: after the site reloads the phone reconnects on its own.")}</p>
+      <a class="remote-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>
+      <p class="remote-status" data-remote-status></p>
+      <div class="remote-actions">
+        <button class="btn small ghost" data-remote-new title="${L("Старая ссылка перестанет работать", "The old link will stop working")}">${L("Новая ссылка", "New link")}</button>
+        <button class="btn small ghost" data-remote-off>${L("Выключить", "Turn off")}</button>
+      </div>
+    </div>`;
+    remoteShowStatus();
+  };
+  m.addEventListener("click", (e) => {
+    if (e.target === m || e.target.closest("[data-remote-close]")) {
+      m.remove();
+      phoneLink.modals.delete(m);
+    } else if (e.target.closest("[data-remote-new]")) {
+      remoteStop(true);
+      remoteStart();
+      draw();
+    } else if (e.target.closest("[data-remote-off]")) {
+      remoteStop();
+      m.remove();
+      phoneLink.modals.delete(m);
+    }
+  });
+  doc.addEventListener("keydown", function esc2(e) {
+    if (e.key !== "Escape" || !m.isConnected) return;
+    m.remove();
+    phoneLink.modals.delete(m);
+    doc.removeEventListener("keydown", esc2);
+  });
+  doc.body.append(m);
+  phoneLink.modals.add(m);
+  draw();
+}
+if (store.get("remoteOn", false)) remoteStart();
 window.__abiear = { tracker, grid, state, priceSeen, syncPrices, engine, reader };
 
 })();

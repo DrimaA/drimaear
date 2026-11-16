@@ -976,3 +976,26 @@ body.mini .space-bg { display: none; }
 .map-dialog { background: linear-gradient(180deg, rgba(23, 27, 24, 0.96), rgba(11, 15, 21, 0.98));
   border-color: rgba(130, 165, 255, 0.26); box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.9); }
 .map-dialog::backdrop { background: rgba(4, 6, 11, 0.74); backdrop-filter: none; }
+
+/* ---- Телефон: окно с QR-кодом (на сайте и в окне поверх игры) ---- */
+#phone.on { color: #4ec27a; border-color: rgba(78, 194, 122, 0.45); }
+.remote-modal {
+  position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center;
+  padding: 12px; background: rgba(0, 0, 0, 0.6);
+}
+.remote-card {
+  display: flex; flex-direction: column; gap: 10px; width: min(340px, 100%); max-height: 100%; overflow: auto;
+  padding: 14px; border-radius: 10px; background: var(--surface, #15181a); border: 1px solid var(--line, #2a2f33);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); color: var(--text, #e8ecef);
+  font: 500 13px/1.45 var(--font-body, system-ui, sans-serif);
+}
+.remote-head { display: flex; align-items: center; justify-content: space-between; font-size: 15px; }
+.remote-x { background: none; border: 0; color: var(--text-3, #9aa3ab); font-size: 22px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.remote-qr { align-self: center; width: min(240px, 70vw); aspect-ratio: 1; border-radius: 6px; overflow: hidden; background: #fff; }
+.remote-qr svg { display: block; width: 100%; height: 100%; }
+.remote-hint { margin: 0; color: var(--text-3, #9aa3ab); font-size: 12px; }
+.remote-link { font: 500 11px/1.3 var(--font-mono, monospace); color: var(--text-3, #9aa3ab); word-break: break-all; }
+.remote-status { margin: 0; font-weight: 600; color: #e8c46b; }
+.remote-status.ok { color: #4ec27a; }
+.remote-status.bad { color: #e5534b; }
+.remote-actions { display: flex; gap: 8px; justify-content: flex-end; }

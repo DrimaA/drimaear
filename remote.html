@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d0c">
+  <meta name="robots" content="noindex">
+  <title>ABI Merchant · телефон</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 28 9v14l-12 7-12-7V9z' fill='%230b0d0c' stroke='%23f2c230' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="fonts/fonts.css">
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    /* Копия окна поверх игры на телефоне: страница прокручивается целиком, сетка — во всю ширину. */
+    html, body.remote { background: var(--bg); }
+    body.remote { min-height: 100vh; padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); }
+    body.remote .mini-wrap { flex-direction: column; align-items: stretch; }
+    body.remote .mgrid-scroll { overflow: visible; max-height: none; }
+    body.remote [data-remote-open] { display: none; }
+    .rstatus {
+      display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-sm, 6px);
+      background: var(--surface); border: 1px solid var(--line); color: var(--text-3);
+      font: 600 12px/1.3 var(--font-body, system-ui, sans-serif);
+    }
+    .rstatus::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #e8c46b; flex: none; }
+    .rstatus.ok::before { background: #4ec27a; }
+    .rstatus.bad::before { background: #e5534b; }
+    .rstatus.ok { position: fixed; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 50; opacity: 0.85; padding: 4px 8px; }
+    .rstatus.ok span { display: none; }
+    .rhelp { color: var(--text-3); font: 500 13px/1.5 var(--font-body, system-ui, sans-serif); padding: 12px 4px; }
+    .rhelp b { color: var(--text); }
+  </style>
+</head>
+<body class="mini remote">
+  <div id="rstatus" class="rstatus"><span>Подключение…</span></div>
+  <div id="rsprite" hidden></div>
+  <div id="root"></div>
+  <script src="vendor/peerjs/peerjs.min.js"></script>
+  <script src="js/remote.js"></script>
+</body>
+</html>
