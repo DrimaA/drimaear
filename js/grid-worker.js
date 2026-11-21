@@ -237,11 +237,24 @@
       i = j;
     }
     if (a < 0) return null;
+    // Правая рамка: снаружи к ней вплотную прилегает полоса прокрутки (светлая), и на 1600×900
+    // контраст «линия ярче соседей» там не проходил — рамка пропадала по всей высоте ползунка.
+    // У неё контраст меряем только внутрь панели.
     const colAt = (x, y) => {
       const v = Math.max(lum(x - 1, y), lum(x, y), lum(x + 1, y));
-      return v >= LINE_MIN - 4 && v - Math.max(lum(x - 4, y), lum(x + 4, y)) >= 3;
+      const side = x === xs[GRID_COLS] ? lum(x - 4, y) : Math.max(lum(x - 4, y), lum(x + 4, y));
+      return v >= LINE_MIN - 4 && v - side >= 3;
     };
     const frameAt = (x, y) => colAt(x, y) && Math.max(lum(x - 1, y), lum(x, y), lum(x + 1, y)) >= WALL_V;
+    // Плашка подсказки игры закрывает 2–3 вертикальные линии сетки на высоту ~1,3 клетки. Рядом с
+    // широкими грузами (у 2×1, 2×2 внутренних линий нет) видимых линий оставалось 3–4 из 5 нужных,
+    // разрыв превышал допуск, и сетка «резалась» по плашке: детектор брал нижнюю, более длинную
+    // часть, а верхние ряды пропадали — ровно когда наводишь на груз вверху списка. Поэтому плашки
+    // ищем заранее, и строки под ними — не разрыв, если линий сетки по бокам видно хотя бы 3.
+    // В зазоре между шапкой «Таинственные припасы» и сеткой видны только 2 (рамка) — плашка у
+    // верхнего ряда, залезшая в зазор, шапку к сетке не приклеит.
+    const tipsEarly = findTips(lum, W, H, xs, lines.slice(a, b + 1), pitch).filter((t) => t.x1 > xs[0] && t.x0 < xs[GRID_COLS] && tipHide(t, lum, W, pitch, xs));
+    const underTip = (y) => tipsEarly.some((t) => y >= t.y0 - 3 && y <= t.y1 + 3);
     let top = -1, bottom = -1;
     for (let y = 4, run = -1, gap = 0; y < H - 4; y++) {
       const n = xs.filter((x) => colAt(x, y)).length;
@@ -253,7 +266,7 @@
           top = run;
           bottom = y;
         }
-      } else if (run >= 0 && ++gap > Math.max(6, pitch * 0.14)) run = -1;
+      } else if (run >= 0 && !(n >= 3 && underTip(y)) && ++gap > Math.max(6, pitch * 0.14)) run = -1;
     }
     while (a < b && lines[a] < top - 3) a++;
     while (b > a && lines[b] > bottom + 3) b--;
